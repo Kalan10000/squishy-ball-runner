@@ -4,194 +4,264 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zen Elements: Time Warp</title>
+    <title>Sticky Stop Slime</title>
     <style>
         body {
             margin: 0;
-            background: #0a0a0a;
-            color: #fff;
-            font-family: 'Segoe UI', sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
             overflow: hidden;
-            user-select: none;
+            background: #020617;
+            font-family: 'Segoe UI', sans-serif;
         }
 
         canvas {
-            border: 4px solid #333;
-            background: #000;
-            image-rendering: pixelated;
-            box-shadow: 0 0 40px #000;
+            display: block;
         }
 
-        .ui {
+        #ui-left {
             position: absolute;
             top: 20px;
-            display: flex;
-            gap: 15px;
-            align-items: center;
-            background: rgba(30, 30, 30, 0.9);
-            padding: 12px 25px;
-            border-radius: 50px;
-            border: 1px solid #555;
-            backdrop-filter: blur(10px);
-            z-index: 10;
+            left: 20px;
+            color: #f8fafc;
+            pointer-events: none;
+            z-index: 20;
         }
 
-        .tool {
-            opacity: 0.4;
-            font-weight: 800;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: 0.2s;
-        }
-
-        .tool.active {
-            opacity: 1;
-            color: #00d2ff;
-            transform: scale(1.1);
-        }
-
-        .speed-control {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-left: 10px;
-            border-left: 1px solid #555;
-            padding-left: 20px;
-        }
-
-        input[type=range] {
-            cursor: pointer;
-            accent-color: #00d2ff;
-        }
-
-        button {
-            padding: 8px 15px;
-            border-radius: 20px;
-            border: none;
-            background: #ff4757;
+        #ui-right {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
             color: white;
-            cursor: pointer;
+            text-align: center;
+            z-index: 20;
+        }
+
+        #restart-btn {
+            position: absolute;
+            top: 60%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 40px;
+            font-size: 1.2rem;
             font-weight: bold;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            display: none;
+            background: #f43f5e;
+            color: white;
+            z-index: 30;
+        }
+
+        #msg {
+            position: absolute;
+            top: 45%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #f1f5f9;
+            font-size: 3.5rem;
+            text-align: center;
+            display: none;
+            font-weight: bold;
+            z-index: 30;
         }
     </style>
 </head>
 
 <body>
-
-    <div class="ui">
-        <div id="tool-1" class="tool active" onclick="setTool(1)">SAND</div>
-        <div id="tool-2" class="tool" onclick="setTool(2)">WATER</div>
-        <div id="tool-3" class="tool" onclick="setTool(3)">STEEL</div>
-        <div id="tool-0" class="tool" onclick="setTool(0)">ERASER</div>
-
-        <div class="speed-control">
-            <span>SPEED:</span>
-            <input type="range" id="speedSlider" min="1" max="10" value="1">
-            <span id="speedVal">1x</span>
-        </div>
-
-        <button onclick="clearGrid()">RESET</button>
+    <div id="ui-left">
+        <h1 id="score">0m</h1>
+        <p>A / D to MOVE | SPACE to JUMP (Strength: 128)</p>
     </div>
-
-    <canvas id="sandCanvas"></canvas>
+    <div id="ui-right">
+        <input type="color" id="colorPicker" value="#10b981">
+    </div>
+    <div id="msg">CRUSHED!</div>
+    <button id="restart-btn">RESTART</button>
+    <canvas id="canvas"></canvas>
 
     <script>
-        const canvas = document.getElementById('sandCanvas');
-        const ctx = canvas.getContext('2d', { alpha: false });
-        const speedSlider = document.getElementById('speedSlider');
-        const speedVal = document.getElementById('speedVal');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const msgEl = document.getElementById('msg');
+        const restartBtn = document.getElementById('restart-btn');
+        const colorPicker = document.getElementById('colorPicker');
 
-        const width = 180, height = 180, cellSize = 4;
-        canvas.width = width * cellSize; canvas.height = height * cellSize;
+        let width, height, groundY;
+        let particles = [];
+        let constraints = [];
+        let pistons = [];
+        let distance = 0;
+        let gameOver = false;
+        let keys = {};
 
-        let grid = Array.from({ length: width }, () => new Int8Array(height).fill(0));
-        let selectedElement = 1;
-        let isMouseDown = false;
-        let mouseX = 0, mouseY = 0;
-        let frameFlip = false;
+        // --- PHYSICS TWEAKS ---
+        const PARTICLE_COUNT = 20;
+        const RADIUS = 60;
+        const SKIN_STIFFNESS = 0.25;
+        const INTERNAL_STIFFNESS = 0.008;
+        const BASE_FRICTION = 0.96;    // Glides while moving
+        const STOP_FRICTION = 0.85;    // "Sticky" stop when keys released
+        const GRAVITY = 0.85;
+        const JUMP_FORCE = 1024;
+        const MOVE_SPEED = 2.0;
+        const MAX_VEL = 35;
 
-        function setTool(id) { selectedElement = id; updateUI(); }
-        function updateUI() {
-            document.querySelectorAll('.tool').forEach(t => t.classList.remove('active'));
-            document.getElementById(`tool-${selectedElement}`).classList.add('active');
-        }
+        function init() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            groundY = height - 60;
+            particles = [];
+            constraints = [];
+            pistons = [];
+            distance = 0;
+            gameOver = false;
+            msgEl.style.display = 'none';
+            restartBtn.style.display = 'none';
 
-        speedSlider.oninput = function () { speedVal.innerText = this.value + "x"; };
+            const startX = 200;
+            const startY = groundY - 100;
 
-        window.addEventListener('wheel', (e) => {
-            selectedElement = e.deltaY > 0 ? (selectedElement % 3) + 1 : (selectedElement === 1 ? 3 : selectedElement - 1);
-            updateUI();
-        });
-
-        const getMousePos = (e) => {
-            const rect = canvas.getBoundingClientRect();
-            return [Math.floor((e.clientX - rect.left) / cellSize), Math.floor((e.clientY - rect.top) / cellSize)];
-        };
-
-        canvas.addEventListener('mousedown', (e) => { isMouseDown = true;[mouseX, mouseY] = getMousePos(e); });
-        window.addEventListener('mouseup', () => isMouseDown = false);
-        window.addEventListener('mousemove', (e) => { [mouseX, mouseY] = getMousePos(e); });
-
-        function spawn() {
-            if (!isMouseDown) return;
-            let r = (selectedElement === 3 || selectedElement === 0) ? 3 : 1;
-            for (let i = -r; i <= r; i++) {
-                for (let j = -r; j <= r; j++) {
-                    let nx = mouseX + i, ny = mouseY + j;
-                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) grid[nx][ny] = selectedElement;
-                }
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const angle = (i / PARTICLE_COUNT) * Math.PI * 2;
+                particles.push({
+                    x: startX + Math.cos(angle) * RADIUS,
+                    y: startY + Math.sin(angle) * RADIUS,
+                    oldX: startX + Math.cos(angle) * RADIUS,
+                    oldY: startY + Math.sin(angle) * RADIUS
+                });
             }
+
+            // Connect particles
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                constraints.push({ p1: particles[i], p2: particles[(i + 1) % PARTICLE_COUNT], len: (Math.PI * 2 * RADIUS) / PARTICLE_COUNT, type: 'skin' });
+                let opp = (i + Math.floor(PARTICLE_COUNT / 2)) % PARTICLE_COUNT;
+                constraints.push({ p1: particles[i], p2: particles[opp], len: RADIUS * 2, type: 'int' });
+            }
+
+            for (let i = 0; i < 5; i++) spawnPiston(1000 + i * 850);
         }
 
-        function updatePhysics() {
-            frameFlip = !frameFlip;
-            for (let y = height - 1; y >= 0; y--) {
-                for (let xRaw = 0; xRaw < width; xRaw++) {
-                    let x = frameFlip ? xRaw : (width - 1 - xRaw);
-                    let type = grid[x][y];
-                    if (type <= 0 || type === 3) continue;
+        function spawnPiston(x) {
+            pistons.push({ x, h: 0, targetH: groundY - 30, state: 'wait', timer: Math.random() * 60 });
+        }
 
-                    let dir = Math.random() < 0.5 ? 1 : -1;
-                    if (y < height - 1) {
-                        if (grid[x][y + 1] === 0) { grid[x][y + 1] = type; grid[x][y] = 0; }
-                        else if (x + dir >= 0 && x + dir < width && grid[x + dir][y + 1] === 0) { grid[x + dir][y + 1] = type; grid[x][y] = 0; }
-                        else if (x - dir >= 0 && x - dir < width && grid[x - dir][y + 1] === 0) { grid[x - dir][y + 1] = type; grid[x][y] = 0; }
-                        else if (type === 2) { // Water spread
-                            if (x + dir >= 0 && x + dir < width && grid[x + dir][y] === 0) { grid[x + dir][y] = 2; grid[x][y] = 0; }
-                        }
+        function update() {
+            let avgX = 0, avgY = 0;
+            // Determine friction based on input
+            const isMoving = keys['d'] || keys['a'] || keys['arrowright'] || keys['arrowleft'];
+            const currentFriction = isMoving ? BASE_FRICTION : STOP_FRICTION;
+
+            particles.forEach(p => {
+                let vx = (p.x - p.oldX) * currentFriction;
+                let vy = (p.y - p.oldY) * currentFriction;
+
+                vx = Math.min(Math.max(vx, -MAX_VEL), MAX_VEL);
+                vy = Math.min(Math.max(vy, -MAX_VEL), MAX_VEL);
+
+                p.oldX = p.x; p.oldY = p.y;
+
+                if (!gameOver) {
+                    if (keys['d'] || keys['arrowright']) p.x += MOVE_SPEED;
+                    if (keys['a'] || keys['arrowleft']) p.x -= MOVE_SPEED;
+                    if (keys[' '] && p.y >= groundY - 5) {
+                        p.y -= JUMP_FORCE * 0.12;
                     }
                 }
+
+                p.x += vx;
+                p.y += vy + GRAVITY;
+
+                // Ground, Walls, and Ceiling Bounds
+                if (p.y > groundY) { p.y = groundY; p.x -= (p.x - p.oldX) * 0.4; } // Floor friction
+                if (p.y < 10) { p.y = 10; p.oldY = p.y + 2; } // Ceiling bounce
+                if (p.x < 10) p.x = 10;
+            });
+
+            // Solver for softness
+            for (let s = 0; s < 12; s++) {
+                constraints.forEach(c => {
+                    const dx = c.p2.x - c.p1.x, dy = c.p2.y - c.p1.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const stiff = c.type === 'skin' ? SKIN_STIFFNESS : INTERNAL_STIFFNESS;
+                    const diff = (c.len - dist) / dist * (gameOver ? 0.3 : stiff);
+                    c.p1.x -= dx * diff; c.p1.y -= dy * diff;
+                    c.p2.x += dx * diff; c.p2.y += dy * diff;
+                });
+                particles.forEach(p => { if (p.y > groundY) p.y = groundY; });
             }
+
+            particles.forEach(p => { avgX += p.x; avgY += p.y; });
+            const cx = avgX / PARTICLE_COUNT;
+
+            pistons.forEach(p => {
+                p.timer++;
+                if (p.state === 'wait' && p.timer > 70) p.state = 'drop';
+                if (p.state === 'drop') { p.h += 55; if (p.h >= p.targetH) p.state = 'rise'; }
+                if (p.state === 'rise') { p.h -= 6; if (p.h <= 0) { p.state = 'wait'; p.timer = 0; } }
+
+                particles.forEach(part => {
+                    if (part.x > p.x && part.x < p.x + 160 && part.y < p.h) {
+                        if (Math.abs(part.x - cx) < 25 && !gameOver) {
+                            gameOver = true;
+                            msgEl.style.display = 'block';
+                            restartBtn.style.display = 'block';
+                        }
+                        part.y = p.h + 5;
+                    }
+                });
+            });
+
+            if (cx > 400) {
+                const s = (cx - 400) * 0.2;
+                particles.forEach(p => { p.x -= s; p.oldX -= s; });
+                pistons.forEach(p => p.x -= s);
+                if (!gameOver) distance += s;
+            }
+
+            if (pistons[0] && pistons[0].x < -300) {
+                pistons.shift();
+                spawnPiston(pistons[pistons.length - 1].x + 850);
+            }
+            scoreEl.innerText = Math.floor(distance / 10) + "m";
         }
 
-        function render() {
-            spawn();
+        function draw() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, groundY, width, 60);
 
-            // Run physics multiple times per frame based on slider
-            const iterations = parseInt(speedSlider.value);
-            for (let i = 0; i < iterations; i++) {
-                updatePhysics();
-            }
+            pistons.forEach(p => {
+                ctx.fillStyle = '#f43f5e';
+                ctx.fillRect(p.x, 0, 160, p.h);
+            });
 
-            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            for (let x = 0; x < width; x++) {
-                for (let y = 0; y < height; y++) {
-                    let v = grid[x][y];
-                    if (v === 1) ctx.fillStyle = '#f1c40f';
-                    else if (v === 2) ctx.fillStyle = '#3498db';
-                    else if (v === 3) ctx.fillStyle = '#7f8c8d';
-                    if (v > 0) ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-                }
+            ctx.beginPath();
+            ctx.moveTo(particles[0].x, particles[0].y);
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                let p = particles[i], next = particles[(i + 1) % PARTICLE_COUNT];
+                ctx.quadraticCurveTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2);
             }
-            requestAnimationFrame(render);
+            ctx.closePath();
+            ctx.fillStyle = colorPicker.value;
+            ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.8)";
+            ctx.lineWidth = 3;
+            ctx.stroke();
+
+            update();
+            requestAnimationFrame(draw);
         }
-        function clearGrid() { grid = Array.from({ length: width }, () => new Int8Array(height).fill(0)); }
-        render();
+
+        window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+        restartBtn.onclick = init;
+        init();
+        draw();
     </script>
 </body>
 
