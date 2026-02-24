@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zen Elements: Time Warp</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0a0a0a;
+            color: #fff;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        canvas {
+            border: 4px solid #333;
+            background: #000;
+            image-rendering: pixelated;
+            box-shadow: 0 0 40px #000;
+        }
+
+        .ui {
+            position: absolute;
+            top: 20px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            background: rgba(30, 30, 30, 0.9);
+            padding: 12px 25px;
+            border-radius: 50px;
+            border: 1px solid #555;
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .tool {
+            opacity: 0.4;
+            font-weight: 800;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .tool.active {
+            opacity: 1;
+            color: #00d2ff;
+            transform: scale(1.1);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-left: 10px;
+            border-left: 1px solid #555;
+            padding-left: 20px;
+        }
+
+        input[type=range] {
+            cursor: pointer;
+            accent-color: #00d2ff;
+        }
+
+        button {
+            padding: 8px 15px;
+            border-radius: 20px;
+            border: none;
+            background: #ff4757;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="ui">
+        <div id="tool-1" class="tool active" onclick="setTool(1)">SAND</div>
+        <div id="tool-2" class="tool" onclick="setTool(2)">WATER</div>
+        <div id="tool-3" class="tool" onclick="setTool(3)">STEEL</div>
+        <div id="tool-0" class="tool" onclick="setTool(0)">ERASER</div>
+
+        <div class="speed-control">
+            <span>SPEED:</span>
+            <input type="range" id="speedSlider" min="1" max="10" value="1">
+            <span id="speedVal">1x</span>
+        </div>
+
+        <button onclick="clearGrid()">RESET</button>
+    </div>
+
+    <canvas id="sandCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('sandCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        const speedSlider = document.getElementById('speedSlider');
+        const speedVal = document.getElementById('speedVal');
+
+        const width = 180, height = 180, cellSize = 4;
+        canvas.width = width * cellSize; canvas.height = height * cellSize;
+
+        let grid = Array.from({ length: width }, () => new Int8Array(height).fill(0));
+        let selectedElement = 1;
+        let isMouseDown = false;
+        let mouseX = 0, mouseY = 0;
+        let frameFlip = false;
+
+        function setTool(id) { selectedElement = id; updateUI(); }
+        function updateUI() {
+            document.querySelectorAll('.tool').forEach(t => t.classList.remove('active'));
+            document.getElementById(`tool-${selectedElement}`).classList.add('active');
+        }
+
+        speedSlider.oninput = function () { speedVal.innerText = this.value + "x"; };
+
+        window.addEventListener('wheel', (e) => {
+            selectedElement = e.deltaY > 0 ? (selectedElement % 3) + 1 : (selectedElement === 1 ? 3 : selectedElement - 1);
+            updateUI();
+        });
+
+        const getMousePos = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            return [Math.floor((e.clientX - rect.left) / cellSize), Math.floor((e.clientY - rect.top) / cellSize)];
+        };
+
+        canvas.addEventListener('mousedown', (e) => { isMouseDown = true;[mouseX, mouseY] = getMousePos(e); });
+        window.addEventListener('mouseup', () => isMouseDown = false);
+        window.addEventListener('mousemove', (e) => { [mouseX, mouseY] = getMousePos(e); });
+
+        function spawn() {
+            if (!isMouseDown) return;
+            let r = (selectedElement === 3 || selectedElement === 0) ? 3 : 1;
+            for (let i = -r; i <= r; i++) {
+                for (let j = -r; j <= r; j++) {
+                    let nx = mouseX + i, ny = mouseY + j;
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) grid[nx][ny] = selectedElement;
+                }
+            }
+        }
+
+        function updatePhysics() {
+            frameFlip = !frameFlip;
+            for (let y = height - 1; y >= 0; y--) {
+                for (let xRaw = 0; xRaw < width; xRaw++) {
+                    let x = frameFlip ? xRaw : (width - 1 - xRaw);
+                    let type = grid[x][y];
+                    if (type <= 0 || type === 3) continue;
+
+                    let dir = Math.random() < 0.5 ? 1 : -1;
+                    if (y < height - 1) {
+                        if (grid[x][y + 1] === 0) { grid[x][y + 1] = type; grid[x][y] = 0; }
+                        else if (x + dir >= 0 && x + dir < width && grid[x + dir][y + 1] === 0) { grid[x + dir][y + 1] = type; grid[x][y] = 0; }
+                        else if (x - dir >= 0 && x - dir < width && grid[x - dir][y + 1] === 0) { grid[x - dir][y + 1] = type; grid[x][y] = 0; }
+                        else if (type === 2) { // Water spread
+                            if (x + dir >= 0 && x + dir < width && grid[x + dir][y] === 0) { grid[x + dir][y] = 2; grid[x][y] = 0; }
+                        }
+                    }
+                }
+            }
+        }
+
+        function render() {
+            spawn();
+
+            // Run physics multiple times per frame based on slider
+            const iterations = parseInt(speedSlider.value);
+            for (let i = 0; i < iterations; i++) {
+                updatePhysics();
+            }
+
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            for (let x = 0; x < width; x++) {
+                for (let y = 0; y < height; y++) {
+                    let v = grid[x][y];
+                    if (v === 1) ctx.fillStyle = '#f1c40f';
+                    else if (v === 2) ctx.fillStyle = '#3498db';
+                    else if (v === 3) ctx.fillStyle = '#7f8c8d';
+                    if (v > 0) ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+                }
+            }
+            requestAnimationFrame(render);
+        }
+        function clearGrid() { grid = Array.from({ length: width }, () => new Int8Array(height).fill(0)); }
+        render();
+    </script>
+</body>
+
+</html>
